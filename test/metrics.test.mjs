@@ -1,0 +1,9 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {range,periodPnl,sum} from '../api/metrics.mjs';
+test('Beijing midnight and half-open custom interval',()=>{const r=range(new URLSearchParams('range=custom&from=2026-11-01&to=2026-11-01'));assert.equal(r.from,'2026-10-31T16:00:00.000Z');assert.equal(r.to,'2026-11-01T16:00:00.000Z');});
+test('invalid range rejected',()=>assert.throws(()=>range(new URLSearchParams('range=bogus'))));
+test('decimal money is exact',()=>assert.equal(sum(['0.1','0.2']),'0.3'));
+const e=(id,side,time,value)=>({sourceEventKey:id,ownerClerkUserId:'u',orderId:'o',agentId:'a',canonicalEventId:'event',modelId:'m',marketId:'market',tokenId:'token',attributionStatus:'ATTRIBUTED',executionKind:'TRADE',side,actualFilledShares:'10',actualFilledValue:value,actualExecutionPrice:'0.5',feeAmount:'0',feeType:'COLLATERAL',executedAt:time});
+test('period realized PnL includes previous-period cost',()=>{const rows=[e('buy','BUY','2026-10-01','4'),e('sell','SELL','2026-11-02','7')];const out=periodPnl(rows,{from:'2026-11-01',to:'2026-12-01'});assert.equal(out.value,'3');assert.equal(out.winners,1);});
+test('unknown fee excluded from aggregate, not silently zero',()=>{const rows=[{...e('buy','BUY','2026-10-01','4'),feeAmount:null},e('sell','SELL','2026-11-02','7')];const out=periodPnl(rows,{from:'2026-11-01',to:'2026-12-01'});assert.equal(out.covered,0);assert.equal(out.value,'0');assert.equal(out.users[0].status,'PARTIAL');});
+import {activityMetrics} from '../api/metrics.mjs';
+test('retention excludes immature users and same-day repeats',()=>{const rows=[e('1','BUY','2026-11-01T01:00:00Z','4'),e('2','BUY','2026-11-01T03:00:00Z','4')];const r={from:'2026-10-01',to:'2026-12-01'};const a=activityMetrics(rows,[],r,'2026-11-06');assert.equal(a.cohorts[7].eligible,0);const b=activityMetrics(rows,[],r,'2026-11-12');assert.equal(b.cohorts[7].eligible,1);assert.equal(b.cohorts[7].returned,0);});
