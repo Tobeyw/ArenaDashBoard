@@ -1,0 +1,8 @@
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!api/
+!api/**
+!public/
+!public/**

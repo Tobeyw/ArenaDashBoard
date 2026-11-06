@@ -34,3 +34,39 @@ GET `/api/overview`, `/api/users`, `/api/agents`, `/api/orders`, `/api/execution
 ## 验证
 
 `npm test` 测试时区边界、跨期间成本、缺失费用和金额精度。`npm run check` 检查服务与页面脚本语法。
+
+## Docker deployment
+
+Requires Docker Engine and Compose v2 supporting `up --wait`.
+
+```sh
+cp .env.docker.example .env.production
+# Edit .env.production: set the production read-only PG URL and Clerk key.
+chmod 600 .env.production
+./scripts/docker.sh check .env.production
+./scripts/docker.sh start .env.production
+```
+
+Open http://127.0.0.1:4310. Frontend and API run in the same container.
+
+```sh
+./scripts/docker.sh status .env.production
+./scripts/docker.sh logs .env.production
+./scripts/docker.sh restart .env.production
+./scripts/docker.sh stop .env.production
+```
+
+`restart` rebuilds and recreates the container, applying new code and environment values. The script defaults to `.env` when no env-file argument is supplied. It never stops unrelated processes or deletes databases.
+
+For a remote server, use an SSH tunnel:
+
+```sh
+ssh -N -L 4310:127.0.0.1:4310 USER@SERVER
+```
+
+- The image does not contain credentials. Compose injects environment variables at runtime; no `.env` mount is needed.
+- Do not use the local backup URL unchanged: `127.0.0.1` inside a container points to the container itself. For PG on the Docker host, use `host.docker.internal`; PG must listen on a reachable address and allow the container network with a read-only role. For a remote PG instance, use its private hostname/IP.
+- Container HOST/PORT are fixed to `0.0.0.0:4310`. Host binding defaults to `127.0.0.1:4310`; there is no application authentication. Do not expose directly to the public internet.
+- If 4310 is already occupied locally, set DASHBOARD_PORT=4311. Existing local processes are not stopped by the script.
+- Node 24, non-root user, read-only filesystem, bounded log rotation. Health checks verify PG connectivity; Clerk failures are shown separately in the UI.
+- `check` validates Compose syntax only. `start` waits for database health. Docker restarts exited containers, but an unhealthy status alone does not trigger a restart.
