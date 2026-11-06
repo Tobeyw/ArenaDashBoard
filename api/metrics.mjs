@@ -40,10 +40,12 @@ export function periodPnl(rows,r){
   if(end.issues.length)issues.push('历史成本不足');
   const value=new Decimal(sum(end.agents,x=>x.metrics.realizedPnl)).minus(sum(start.agents,x=>x.metrics.realizedPnl)).toFixed();
   const fees=new Decimal(sum(end.agents,x=>x.metrics.fees)).minus(sum(start.agents,x=>x.metrics.fees)).toFixed();
-  if(eligible.some(x=>within(x.executedAt,r)))users.push({id,value,fees,status:issues.length?'PARTIAL':'RECORDED',issues:[...new Set(issues)]});
+  const hasAttributedActivity=eligible.some(x=>within(x.executedAt,r)&&x.attributionStatus==='ATTRIBUTED'&&x.agentId&&['TRADE','SETTLEMENT'].includes(x.executionKind));
+  if(hasAttributedActivity)users.push({id,value,fees,status:issues.length?'PARTIAL':'RECORDED',issues:[...new Set(issues)]});
  }
- const safe=users.filter(x=>x.status==='RECORDED');
- return {value:sum(safe,x=>x.value),fees:sum(safe,x=>x.fees),winners:safe.filter(x=>new Decimal(x.value).gt(0)).length,losers:safe.filter(x=>new Decimal(x.value).lt(0)).length,flat:safe.filter(x=>new Decimal(x.value).eq(0)).length,covered:safe.length,total:users.length,users,status:'PARTIAL',note:'基于已收录流水；未证明全历史回填完整。缺少费用、归属或成本的账户不计入合计。'};
+ const complete=users.filter(x=>x.status==='RECORDED');
+ const partial=users.filter(x=>x.status==='PARTIAL');
+ return {value:sum(users,x=>x.value),fees:sum(users,x=>x.fees),completeValue:sum(complete,x=>x.value),completeFees:sum(complete,x=>x.fees),winners:users.filter(x=>new Decimal(x.value).gt(0)).length,losers:users.filter(x=>new Decimal(x.value).lt(0)).length,flat:users.filter(x=>new Decimal(x.value).eq(0)).length,covered:complete.length,partial:partial.length,total:users.length,users,status:partial.length?'PARTIAL':'RECORDED',note:'展示精确归属流水中可计算的盈亏分量；PARTIAL 账户仍计入已归属分量，但不代表账户完整净盈亏。仅有未归属流水的账户不进入盈亏人数。'};
 }
 export function activityMetrics(executions,users,r,asOf){
  const rows=executions.filter(e=>e.executionKind==='TRADE'&&e.attributionStatus==='ATTRIBUTED'&&e.agentId);
