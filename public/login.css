@@ -1,0 +1,16 @@
+.login-page{min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 20% 15%,#eef5e8 0,transparent 38%),linear-gradient(145deg,#f9fbf8,#eef2ec)}
+.login-card{width:min(430px,100%);padding:42px;background:#fff;border:1px solid #dfe7dd;border-radius:16px;box-shadow:0 24px 70px #1f3d2412}
+.login-brand{display:flex;align-items:center;gap:11px;font-size:20px;font-weight:850;letter-spacing:2px;margin-bottom:48px}
+.login-brand i{width:7px;height:7px;background:#80b653;border-radius:50%;margin-left:auto}
+.login-card h1{font-size:27px;margin:10px 0 12px}
+.login-card>p{color:#7e8b81;line-height:1.8;margin:0 0 28px}
+.login-card label{display:block;font-size:12px;color:#57665b;margin-bottom:9px}
+.password-field{display:flex;border:1px solid #dce4da;border-radius:8px;overflow:hidden;background:#fbfcfa}
+.password-field:focus-within{border-color:#6e9657;box-shadow:0 0 0 3px #72985b17}
+.password-field input{min-width:0;flex:1;padding:13px;border:0;background:transparent;outline:0}
+.password-field button{border:0;background:transparent;color:#6c815f;padding:0 13px;font-size:11px}
+.login-error{min-height:22px;padding-top:8px;color:#a65343;font-size:11px}
+.login-submit{width:100%;border:0;border-radius:8px;padding:13px;background:#234c34;color:#fff;font-weight:600;margin-top:7px}
+.login-submit:hover{background:#193d29}
+.login-submit:disabled{opacity:.65;cursor:wait}
+.login-card small{display:block;text-align:center;color:#9aa59c;font-size:10px;margin-top:26px}

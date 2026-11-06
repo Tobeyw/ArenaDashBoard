@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Arena · 访问验证</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/login.css" />
+  </head>
+  <body class="login-page">
+    <main class="login-card">
+      <div class="login-brand">
+        <span class="logo">a</span><span>ARENA</span><i></i>
+      </div>
+      <div class="eyebrow">OPERATIONS ACCESS</div>
+      <h1>进入运营数据看板</h1>
+      <p>请输入统一访问密码。验证成功后，会话将在 12 小时后自动失效。</p>
+      <form id="login-form">
+        <label for="password">访问密码</label>
+        <div class="password-field">
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            autofocus
+          /><button id="toggle-password" type="button" aria-label="显示密码">
+            显示
+          </button>
+        </div>
+        <div
+          id="login-error"
+          class="login-error"
+          role="alert"
+          aria-live="polite"
+        ></div>
+        <button id="login-submit" class="login-submit" type="submit">
+          进入看板
+        </button>
+      </form>
+      <small>受保护访问 · 密码仅发送至当前服务</small>
+    </main>
+    <script type="module" src="/login.js"></script>
+  </body>
+</html>

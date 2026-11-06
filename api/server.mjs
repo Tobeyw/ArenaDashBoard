@@ -5,9 +5,12 @@ import {fileURLToPath} from 'node:url';
 import pg from 'pg';
 import {createClerkClient} from '@clerk/backend';
 import {range,within,day,sum,periodPnl,activityMetrics} from './metrics.mjs';
+import {createDashboardAuth} from './auth.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public');
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:3,options:'-c default_transaction_read_only=on -c statement_timeout=15000',connectionTimeoutMillis:5000});
+const auth=createDashboardAuth({password:process.env.DASHBOARD_PASSWORD,ttlSeconds:process.env.SESSION_TTL_SECONDS});
 const exclusions=new Set((process.env.EXCLUDED_USER_IDS||'').split(',').filter(Boolean));
+const loginAttempts=new Map();
 let cached,pending,identityCache,identityPending;
 async function identities(){
  if(!process.env.CLERK_SECRET_KEY)return {status:'UNAVAILABLE',reason:'未配置 Clerk',users:[],asOf:null};
@@ -76,11 +79,31 @@ function aggregate(d,identity,r){
  return {range:r,quality,activity,summary:{registered:identity.status==='AVAILABLE'?clerk.length:null,newRegistered:identity.status==='AVAILABLE'?clerk.filter(x=>within(x.registeredAt,r)).length:null,configured:new Set(d.agents.map(x=>x.clerkUserId)).size,liveUsers:new Set(d.agents.filter(x=>x.liveEnabled).map(x=>x.clerkUserId)).size,tradingUsers:first.size,firstTraders:[...first.values()].filter(x=>within(x,r)).length,periodTraders:new Set(trades.map(x=>x.ownerClerkUserId)).size,volume:sum(trades,x=>x.actualFilledValue),buys:sum(trades.filter(x=>x.side==='BUY'),x=>x.actualFilledValue),sells:sum(trades.filter(x=>x.side==='SELL'),x=>x.actualFilledValue),orders:new Set(trades.map(x=>x.orderId).filter(Boolean)).size,matches:trades.length,agents:d.agents.length,liveAgents:d.agents.filter(x=>x.liveEnabled).length,bound:d.bindings.length,allocated:d.allocated.length,available:sum(d.funds,x=>x.availableToBet),reserved:sum(d.reserved,x=>x.value),fundSyncRequired:d.funds.filter(x=>x.syncRequired).length,failedOrders:terminal.filter(x=>x.state==='FAILED').length},pnl,trend:[...dates].sort(([a],[b])=>a.localeCompare(b)).map(([date,es])=>({date,volume:sum(es,x=>x.actualFilledValue),orders:new Set(es.map(x=>x.orderId).filter(Boolean)).size,users:new Set(es.map(x=>x.ownerClerkUserId)).size})),users,agents:d.agents,orders:d.orders.filter(x=>within(x.createdAt,r)).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(o=>({...o,filledValue:sum(d.executions.filter(x=>x.orderId===o.id&&x.executionKind==='TRADE'),x=>x.actualFilledValue)})),executions:trades,signals:d.signals.filter(x=>within(x.decidedAt,r)),analyses:d.analyses.filter(x=>within(x.createdAt,r)),tasks:d.tasks};
 }
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));}
+function clientAddress(req){return String(req.socket.remoteAddress||'unknown');}
+function loginAllowed(req){const key=clientAddress(req),now=Date.now();const attempts=(loginAttempts.get(key)||[]).filter(time=>now-time<10*60_000);loginAttempts.set(key,attempts);return attempts.length<5;}
+function recordLoginFailure(req){const key=clientAddress(req);loginAttempts.set(key,[...(loginAttempts.get(key)||[]),Date.now()]);}
+async function body(req){const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>4096)throw new Error('BODY_TOO_LARGE');chunks.push(chunk);}return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}
+async function staticFile(res,file){const contents=await readFile(path.join(root,file));res.writeHead(200,{'Content-Type':file.endsWith('html')?'text/html; charset=utf-8':file.endsWith('css')?'text/css':'text/javascript','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"});res.end(contents);}
 const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');
- if(req.method!=='GET')return send(res,405,{error:'仅支持只读 GET 请求'});
  try{
   if(url.pathname==='/api/health'){await pool.query('SELECT 1');return send(res,200,{status:'ok'});}
+  if(req.method==='GET'&&url.pathname==='/login')return staticFile(res,'login.html');
+  if(req.method==='GET'&&url.pathname==='/login.js')return staticFile(res,'login.js');
+  if(req.method==='GET'&&url.pathname==='/login.css')return staticFile(res,'login.css');
+  if(req.method==='GET'&&url.pathname==='/style.css')return staticFile(res,'style.css');
+  if(req.method==='POST'&&url.pathname==='/auth/login'){
+   if(!loginAllowed(req))return send(res,429,{error:'尝试次数过多，请 10 分钟后再试'});
+   let input;try{input=await body(req);}catch{return send(res,400,{error:'请求格式无效'});}
+   if(!auth.verifyPassword(input.password)){recordLoginFailure(req);return send(res,401,{error:'密码错误'});}
+   loginAttempts.delete(clientAddress(req));res.setHeader('Set-Cookie',auth.sessionCookie(req));return send(res,200,{ok:true});
+  }
+  if(req.method==='POST'&&url.pathname==='/auth/logout'){res.setHeader('Set-Cookie',auth.clearCookie(req));return send(res,200,{ok:true});}
+  if(!auth.isAuthenticated(req)){
+   if(url.pathname.startsWith('/api/'))return send(res,401,{error:'请先登录'});
+   const returnTo=url.pathname==='/'?'/':url.pathname;res.writeHead(302,{Location:`/login?returnTo=${encodeURIComponent(returnTo)}`,'Cache-Control':'no-store'});return res.end();
+  }
+  if(req.method!=='GET')return send(res,405,{error:'不支持此请求方法'});
   if(url.pathname.startsWith('/api/')){
    let r;try{r=range(url.searchParams);}catch(e){return send(res,400,{error:e.message});}
    const name=url.pathname.slice(5);if(!['activity','overview','users','agents','orders','executions','signals','analyses','funds','quality'].includes(name))return send(res,404,{error:'接口不存在'});
@@ -98,8 +121,7 @@ const server=http.createServer(async(req,res)=>{
   }
   const file={'/':'index.html','/app.js':'app.js','/style.css':'style.css'}[url.pathname];
   if(!file)return send(res,404,{error:'页面不存在'});
-  const contents=await readFile(path.join(root,file));
-  res.writeHead(200,{'Content-Type':file.endsWith('html')?'text/html; charset=utf-8':file.endsWith('css')?'text/css':'text/javascript','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'"});res.end(contents);
+  return staticFile(res,file);
  }catch(e){console.error('Request failed:',e.code||e.name);send(res,503,{error:'数据源暂时不可用，请检查 PostgreSQL 连接和服务配置'});}
 });
 server.listen(Number(process.env.PORT||4310),process.env.HOST||'127.0.0.1',()=>console.log(`Arena Dashboard: http://${process.env.HOST||'127.0.0.1'}:${process.env.PORT||4310}`));
