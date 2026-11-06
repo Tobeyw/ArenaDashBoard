@@ -1,3 +1,4 @@
+
 services:
   dashboard:
     image: arena-dashboard:local
@@ -6,14 +7,16 @@ services:
       context: .
 
     restart: unless-stopped
-    network_mode: host
+
+    ports:
+      - "4310:4310"
 
     env_file:
       - ${DASHBOARD_ENV_FILE:-.env}
 
     environment:
       NODE_ENV: production
-      HOST: 127.0.0.1
+      HOST: 0.0.0.0
       PORT: "4310"
 
     read_only: true
