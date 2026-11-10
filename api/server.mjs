@@ -7,6 +7,7 @@ import Decimal from 'decimal.js';
 import {createClerkClient} from '@clerk/backend';
 import {range,within,day,sum,periodPnl,executionPerformance,activityMetrics,strategyPerformance} from './metrics.mjs';
 import {createDashboardAuth} from './auth.mjs';
+import {operations} from './operations.mjs';
 import {createAggregateCache} from './aggregate-cache.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public');
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:3,options:'-c default_transaction_read_only=on -c statement_timeout=15000',connectionTimeoutMillis:5000});
@@ -41,7 +42,8 @@ async function snapshot(){
    const sql={
     users:'SELECT u.*, p."clerkRegisteredAt" FROM "User" u LEFT JOIN "PlatformAccess" p ON p."userId"=u.id',
     agents:'SELECT a.*, u."clerkUserId", c."modelIds", c."positionMethod",c."allocationMode",f."availableToBet",f."syncRequired" FROM "Agent" a JOIN "User" u ON u.id=a."ownerId" JOIN "AgentConfigSnapshot" c ON c.id=a."currentConfigSnapshotId" LEFT JOIN "AgentFunds" f ON f."agentId"=a.id',
-    platform:'SELECT "clerkUserId","modelId" FROM "PlatformModelAccount"',
+    platform:'SELECT "id","clerkUserId","modelId" FROM "PlatformModelAccount"',
+    platformOrders:`SELECT o.id,o.state,o."createdAt",o."requestedStake",o."failureReason",o."attemptNumber",a."modelId",d."canonicalEventId",s."positionMethod",r."competitionName" AS competition, r."homeTeamName" || ' vs ' || r."awayTeamName" AS "fixtureName" FROM "PlatformOrder" o JOIN "PlatformModelAccount" a ON a.id=o."accountId" JOIN "PlatformModelDecision" d ON d.id=o."decisionId" LEFT JOIN "PlatformStrategySnapshot" s ON s.id=d."strategySnapshotId" LEFT JOIN "CatalogEventRevision" r ON r.id=d."catalogEventRevisionId"`,
     bindings:'SELECT "clerkUserId","createdAt","verifiedAt" FROM "PredictBinding"',
     executions:'SELECT e.*, s."agentId",s."modelId",s."canonicalEventId",s.id AS "signalId",c."positionMethod",a.name AS "agentName",r."competitionName" AS competition,CASE WHEN r.id IS NULL THEN NULL ELSE r."homeTeamName" || \' vs \' || r."awayTeamName" END AS "fixtureName" FROM "ProviderExecutionEvent" e LEFT JOIN "Order" o ON o.id=e."orderId" LEFT JOIN "Signal" s ON s.id=o."signalId" LEFT JOIN "AgentConfigSnapshot" c ON c.id=s."configSnapshotId" LEFT JOIN "Agent" a ON a.id=s."agentId" LEFT JOIN "CatalogEventRevision" r ON r.id=s."catalogEventRevisionId" WHERE e.scope=\'USER\' ORDER BY e."executedAt",e."sourceEventKey"',
     orders:'SELECT o.id,o."signalId",o."ownerClerkUserId",o.state,o."failureReason",o."failureSummary",o."requestedStake",o."createdAt",o."submittedAt",o."completedAt",o."attemptNumber",s."agentId",s."modelId",s."canonicalEventId",c."positionMethod",a.name AS "agentName",r."competitionName" AS competition,CASE WHEN r.id IS NULL THEN NULL ELSE r."homeTeamName" || \' vs \' || r."awayTeamName" END AS "fixtureName" FROM "Order" o JOIN "Signal" s ON s.id=o."signalId" LEFT JOIN "AgentConfigSnapshot" c ON c.id=s."configSnapshotId" LEFT JOIN "Agent" a ON a.id=s."agentId" LEFT JOIN "CatalogEventRevision" r ON r.id=s."catalogEventRevisionId"',
@@ -53,7 +55,7 @@ async function snapshot(){
     allocated:'SELECT DISTINCT "ownerClerkUserId" FROM "AgentFundEntry" WHERE kind=\'ALLOCATE\' AND amount>0',
     reserved:'SELECT "ownerClerkUserId",sum(reserved)::text AS value FROM "AgentFundOrder" GROUP BY "ownerClerkUserId"',
     platformFunds:'SELECT p."modelId",p."initialCapital",p.status,latest."asOf",latest."cashBalance",latest."positionsValue",latest."accountValue",latest."totalPnl" FROM "PlatformModelAccount" p LEFT JOIN LATERAL (SELECT s."asOf",s."cashBalance",s."positionsValue",s."accountValue",s."totalPnl" FROM "PlatformModelPerformanceSnapshot" s WHERE s."accountId"=p.id ORDER BY s."asOf" DESC LIMIT 1) latest ON true',
-    platformSnapshots:'SELECT p."modelId",s."asOf",s."totalPnl",s."accountValue" FROM "PlatformModelPerformanceSnapshot" s JOIN "PlatformModelAccount" p ON p.id=s."accountId" WHERE s."totalPnl" IS NOT NULL ORDER BY p."modelId",s."asOf"',
+    platformSnapshots:'SELECT p."modelId",s."asOf",s."totalPnl",s."accountValue",s."cashBalance" FROM "PlatformModelPerformanceSnapshot" s JOIN "PlatformModelAccount" p ON p.id=s."accountId" WHERE s."totalPnl" IS NOT NULL ORDER BY p."modelId",s."asOf"',
     platformDecisions:'SELECT d.id,d."modelId",d.decision,d."requestedStake",d."decidedAt",d."canonicalEventId",o.id AS "orderId",o.state AS "orderState",o."requestedStake" AS "orderRequestedStake",r."competitionName" AS competition,CASE WHEN r.id IS NULL THEN NULL ELSE r."homeTeamName" || \' vs \' || r."awayTeamName" END AS "fixtureName" FROM "PlatformModelDecision" d LEFT JOIN "PlatformOrder" o ON o."decisionId"=d.id LEFT JOIN "CatalogEventRevision" r ON r.id=d."catalogEventRevisionId"',
     platformExecutions:'SELECT e.*,a."modelId",d."canonicalEventId",r."competitionName" AS competition,CASE WHEN r.id IS NULL THEN NULL ELSE r."homeTeamName" || \' vs \' || r."awayTeamName" END AS "fixtureName" FROM "ProviderExecutionEvent" e JOIN "PlatformModelAccount" a ON a.id=e."platformModelAccountId" LEFT JOIN "PlatformOrder" o ON o.id=e."platformOrderId" LEFT JOIN "PlatformModelDecision" d ON d.id=o."decisionId" LEFT JOIN "CatalogEventRevision" r ON r.id=d."catalogEventRevisionId" WHERE e.scope=\'PLATFORM\' ORDER BY e."executedAt",e."sourceEventKey"'
    };
@@ -150,7 +152,9 @@ const server=http.createServer(async(req,res)=>{
   if(req.method!=='GET')return send(res,405,{error:'不支持此请求方法'});
   if(url.pathname.startsWith('/api/')){
    let r;try{r=range(url.searchParams);}catch(e){return send(res,400,{error:e.message});}
-   const name=url.pathname.slice(5);if(!['activity','overview','users','agents','orders','executions','signals','analyses','funds','events','quality'].includes(name))return send(res,404,{error:'接口不存在'});
+   const name=url.pathname.slice(5);
+   if(name==='operations'){const [d,c]=await Promise.all([snapshot(),identities()]);try{return send(res,200,aggregateCache.get(d,c,r,'ops:'+url.searchParams.toString(),()=>operations(d,c,new URLSearchParams(url.searchParams),r)));}catch(e){return send(res,400,{error:e.message});}}
+   if(!['activity','overview','users','agents','orders','executions','signals','analyses','funds','events','quality'].includes(name))return send(res,404,{error:'接口不存在'});
    const [d,c]=await Promise.all([snapshot(),identities()]);const market=url.searchParams.get('market')||'';const markets=[...new Set([...d.executions,...d.orders].map(x=>x.competition).filter(Boolean))].sort();const result=aggregateCache.get(d,c,r,market,()=>aggregate(d,c,r,market));
    if(name==='overview')return send(res,200,{range:r,market,markets,summary:result.summary,pnl:{...result.pnl,users:undefined},trend:result.trend,modelBreakdown:{volume:result.trend,pnl:result.performance.dailyModels},performance:{daily:result.performance.daily,models:result.performance.models},quality:result.quality});
    if(name==='activity')return send(res,200,{...result.activity,trend:result.trend,summary:result.summary});
@@ -173,7 +177,7 @@ const server=http.createServer(async(req,res)=>{
    if(!Number.isInteger(page)||page<1||!Number.isInteger(pageSize)||pageSize<1||pageSize>100)return send(res,400,{error:'分页参数无效'});
    send(res,200,{items:rows.slice((page-1)*pageSize,page*pageSize),total:rows.length,page,pageSize,asOf:d.asOf,range:r,...(name==='agents'?{markets,modelPerformance:result.performance.models,platformModels:result.platformModels}:{}),...(name==='orders'?{matchPerformance:result.matchPerformance,markets,strategyPerformance:strategyPerformance(d.orders,d.executions,r,market)}:{})});return;
   }
-  const file={'/':'index.html','/app.js':'app.js','/style.css':'style.css'}[url.pathname];
+  const file={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/operations.js':'operations.js','/operations.css':'operations.css'}[url.pathname];
   if(!file)return send(res,404,{error:'页面不存在'});
   return staticFile(res,file);
  }catch(e){console.error('Request failed:',e.code||e.name);send(res,503,{error:'数据源暂时不可用，请检查 PostgreSQL 连接和服务配置'});}

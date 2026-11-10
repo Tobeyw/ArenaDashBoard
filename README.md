@@ -1,6 +1,6 @@
 # Arena Dashboard
 
-独立、只读的 Arena 运营看板。Node.js 同时提供页面和 `/api/*`，不依赖交易服务进程。默认监听 `127.0.0.1:4310`，按需求无应用层鉴权，勿直接暴露公网。
+独立、只读的 Arena 运营看板。Node.js 同时提供页面和 `/api/*`，不依赖交易服务进程。默认监听 `127.0.0.1:4310`，页面与 API 均需密码会话鉴权。
 
 ## 启动
 
@@ -13,6 +13,10 @@ npm start
 ```
 
 数据库连接、Clerk 密钥和 `DASHBOARD_PASSWORD` 仅存于被 Git 忽略的 `.env`。访问密码至少 12 个字符；登录会话默认 12 小时，修改密码并重启服务后旧会话立即失效。除 `/api/health` 外，页面和 API 均要求登录。数据库连接强制只读事务、15 秒查询超时，连接池最多 3 个连接。生产使用专用只读角色。当前指向独立本地快照，不会随生产自动更新。Clerk 为实时源，缓存 5 分钟，PG 缓存 1 分钟。刷新按钮重新请求缓存，不强制上游全量重扫。
+
+## 改版状态
+
+新版首页已使用 `/api/operations`。实施范围、数据缺口和未完成验收项见 [改版记录](docs/redesign-status.md)，目前不能视为产品需求全量验收通过。
 
 ## 接口
 
@@ -66,7 +70,7 @@ ssh -N -L 4310:127.0.0.1:4310 USER@SERVER
 
 - The image does not contain credentials. Compose injects environment variables at runtime; no `.env` mount is needed.
 - Do not use the local backup URL unchanged: `127.0.0.1` inside a container points to the container itself. For PG on the Docker host, use `host.docker.internal`; PG must listen on a reachable address and allow the container network with a read-only role. For a remote PG instance, use its private hostname/IP.
-- Container HOST/PORT are fixed to `0.0.0.0:4310`. Host binding defaults to `127.0.0.1:4310`; there is no application authentication. Do not expose directly to the public internet.
+- Container HOST/PORT are fixed to `0.0.0.0:4310`. Host binding defaults to `127.0.0.1:4310`; application pages and APIs require the configured password session.
 - If 4310 is already occupied locally, set DASHBOARD_PORT=4311. Existing local processes are not stopped by the script.
 - Node 24, non-root user, read-only filesystem, bounded log rotation. Health checks verify PG connectivity; Clerk failures are shown separately in the UI.
 - `check` validates Compose syntax only. `start` waits for database health. Docker restarts exited containers, but an unhealthy status alone does not trigger a restart.
