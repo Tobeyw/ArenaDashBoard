@@ -177,7 +177,7 @@ const server=http.createServer(async(req,res)=>{
    if(!Number.isInteger(page)||page<1||!Number.isInteger(pageSize)||pageSize<1||pageSize>100)return send(res,400,{error:'分页参数无效'});
    send(res,200,{items:rows.slice((page-1)*pageSize,page*pageSize),total:rows.length,page,pageSize,asOf:d.asOf,range:r,...(name==='agents'?{markets,modelPerformance:result.performance.models,platformModels:result.platformModels}:{}),...(name==='orders'?{matchPerformance:result.matchPerformance,markets,strategyPerformance:strategyPerformance(d.orders,d.executions,r,market)}:{})});return;
   }
-  const file={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/operations.js':'operations.js','/operations.css':'operations.css'}[url.pathname];
+  const file={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/operations.js':'operations.js','/navigation.mjs':'navigation.mjs','/operations.css':'operations.css'}[url.pathname];
   if(!file)return send(res,404,{error:'页面不存在'});
   return staticFile(res,file);
  }catch(e){console.error('Request failed:',e.code||e.name);send(res,503,{error:'数据源暂时不可用，请检查 PostgreSQL 连接和服务配置'});}

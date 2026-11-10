@@ -29,21 +29,22 @@ export function operations(d,identity,input,r){
  const effective={...r,to:new Date(Math.min(new Date(r.to),new Date(asOf))).toISOString()};
  const previous=previousRange(effective,asOf);
  const clerk=identity.users.filter(u=>!d.official.has(u.id));
+ const userEmails=new Map(clerk.map(u=>[u.id,u.email||null]));
  const local=new Map(d.users.map(u=>[u.clerkUserId,u]));
  const baseUsers=unique([...clerk.map(u=>u.id),...local.keys()]).map(id=>{const c=clerk.find(u=>u.id===id),a=d.agents.filter(a=>a.clerkUserId===id);return {id,email:c?.email||null,registeredAt:c?.registeredAt||local.get(id)?.clerkRegisteredAt||null,agentCount:a.length,live:a.some(a=>a.liveEnabled),bound:d.bindings.some(b=>b.clerkUserId===id),traded:d.executions.some(e=>e.ownerClerkUserId===id&&e.executionKind==='TRADE'&&e.attributionStatus==='ATTRIBUTED'&&e.agentId),stage:null};}).map(u=>({...u,stage:u.traded?'已成交':u.live?'已开启未成交':u.agentCount?'已配置未开启':'未配置'}));
  const userPages=['overview','users','user-list','activity','agents','funds'];
- const userScope=userPages.includes(view),query=(input.get('q')||'').trim().toLowerCase();
+ const userScope=userPages.includes(view),queryUserScope=userScope||input.get('searchScope')==='users',query=(input.get('q')||'').trim().toLowerCase();
  const pick=(key,value)=>!input.getAll(key).filter(Boolean).length||input.getAll(key).includes(String(value??'未记录'));
- const textMatch=row=>!query||Object.values(row).some(v=>typeof v==='string'&&v.toLowerCase().includes(query));
+ const textMatch=row=>!query||[...Object.values(row),userEmails.get(row.ownerClerkUserId||row.clerkUserId)].some(v=>typeof v==='string'&&v.toLowerCase().includes(query));
  const agentBands=['0 个 Agent','1 个 Agent','2 个 Agent','3 个 Agent','4 个 Agent','5 个及以上 Agent'];
  const agentBand=count=>agentBands[Math.min(count,5)];
- const users=baseUsers.filter(u=>pick('agentBand',agentBand(u.agentCount))&&pick('stage',u.stage)&&pick('bound',u.bound)&&(!userScope||textMatch(u)||(view==='agents'&&d.agents.some(a=>a.clerkUserId===u.id&&textMatch({id:a.id,name:a.name}))))&&pick('owner',u.id));
+ const users=baseUsers.filter(u=>pick('agentBand',agentBand(u.agentCount))&&pick('stage',u.stage)&&pick('bound',u.bound)&&(!queryUserScope||textMatch(u)||(view==='agents'&&d.agents.some(a=>a.clerkUserId===u.id&&textMatch({id:a.id,name:a.name}))))&&pick('owner',u.id));
  const ids=new Set(users.map(u=>u.id));
  const allOrders=platform?d.platformOrders:d.orders;
  const dimensions=o=>pick('market',o.competition)&&pick('event',o.canonicalEventId)&&pick('model',o.modelId)&&pick('strategy',o.positionMethod)&&pick('agent',o.agentId);
- const orderCandidates=allOrders.filter(o=>(platform||ids.has(o.ownerClerkUserId))&&dimensions(o)&&pick('status',o.state)&&pick('reason',o.failureReason||'未记录')&&(userScope||textMatch(o))&&(!input.get('min')||new Decimal(o.requestedStake||0).gte(input.get('min')))&&(!input.get('max')||new Decimal(o.requestedStake||0).lte(input.get('max'))));
+ const orderCandidates=allOrders.filter(o=>(platform||ids.has(o.ownerClerkUserId))&&dimensions(o)&&pick('status',o.state)&&pick('reason',o.failureReason||'未记录')&&(queryUserScope||textMatch(o))&&(!input.get('min')||new Decimal(o.requestedStake||0).gte(input.get('min')))&&(!input.get('max')||new Decimal(o.requestedStake||0).lte(input.get('max'))));
  const orderMap=new Map(orderCandidates.map(o=>[o.id,o]));
- const restricted=['status','reason','min','max'].some(k=>input.get(k))||(!userScope&&query);
+ const restricted=['status','reason','min','max'].some(k=>input.get(k))||(!queryUserScope&&query);
  const platformOrderMetadata=new Map((d.platformOrders||[]).map(o=>[o.id,o]));
  const executions=(platform?d.platformExecutions.map(e=>({...e,positionMethod:platformOrderMetadata.get(e.platformOrderId)?.positionMethod})):d.executions).filter(e=>(platform||ids.has(e.ownerClerkUserId))&&dimensions(e)&&(!restricted||orderMap.has(platform?e.platformOrderId:e.orderId))&&pick('side',e.side)).map(e=>platform?{...e,ownerClerkUserId:e.platformModelAccountId,agentId:e.platformModelAccountId,orderId:e.platformOrderId}:e);
  const eligible=executions.filter(e=>e.attributionStatus==='ATTRIBUTED'&&e.agentId);
@@ -87,13 +88,15 @@ export function operations(d,identity,input,r){
  }
  if(view==='executions'){rows=eligible.filter(e=>within(e.executedAt,effective));columns=[column('sourceEventKey','流水'),column('executedAt','发生时间','date'),column('ownerClerkUserId','用户'),column('orderId','订单'),column('fixtureName','赛事'),column('executionKind','成交／结算'),column('side','方向'),column('actualFilledValue','实际金额 USDT','money'),column('feeAmount','手续费','money'),column('feeType','手续费单位')];}
  if(view==='failures'){
+  rows=rows.filter(o=>['FAILED','AMBIGUOUS'].includes(o.state));
+  notes.push('失败异常明细仅展示本期创建、当前为失败或状态不明的订单；上方状态分布用于对比全部订单状态。');
   const statuses=['PENDING','SUBMITTING','SUBMITTED','OPEN','FILLED','FAILED','AMBIGUOUS',...options.status.filter(s=>!['PENDING','SUBMITTING','SUBMITTED','OPEN','FILLED','FAILED','AMBIGUOUS'].includes(s))];
   const seriesLabels={PENDING:'待处理',SUBMITTING:'提交中',SUBMITTED:'已提交',OPEN:'挂单中',FILLED:'已成交',FAILED:'失败',AMBIGUOUS:'状态不明',PARTIALLY_FILLED:'部分成交',CANCELLED:'已取消'};
   const seriesColors={PENDING:'#8495ac',SUBMITTING:'#8959e9',SUBMITTED:'#397bf1',OPEN:'#11a6c2',FILLED:'#08a75c',FAILED:'#db4b45',AMBIGUOUS:'#f78b26',PARTIALLY_FILLED:'#18b1a2',CANCELLED:'#b47c93'};
   const counts=new Map();for(const order of current.os){const date=day(order.createdAt);if(!counts.has(date))counts.set(date,{});const bucket=counts.get(date);bucket[order.state]=(bucket[order.state]||0)+1;}
   const dailyStatuses=days.map(date=>({date,...Object.fromEntries(statuses.map(status=>[status,counts.get(date)?.[status]||0]))}));
   charts.splice(0,charts.length,{title:'订单当前状态分布',type:'timeBars',rows:dailyStatuses,key:statuses[0],seriesKeys:statuses,seriesLabels,seriesColors,label:'date',unit:'笔',axis:'订单数（笔）',integerTicks:true,filter:'date',note:'按订单创建日期对比当前状态 · 悬浮日期查看各状态数量'});
-  bars('失败原因',group(current.os.filter(o=>o.state==='FAILED'),'failureReason'),'value','name','笔',null);
+  bars('失败原因',group(current.os.filter(o=>o.state==='FAILED'),'failureReason'),'value','name','笔','reason');
  }
 
  if(['platform','platform-pnl','funds','events'].includes(view)){
@@ -126,8 +129,8 @@ export function operations(d,identity,input,r){
   const retained=charts.filter(c=>!removed.has(c.title)).map(c=>c.key==='realizedPnl'&&c.label==='date'?{...c,type:'timeBars',signed:true,axis:'已实现盈亏（USDT）'}:c.key==='cumulativePnl'?{...c,signed:true,axis:'累计已实现盈亏（USDT）'}:c);
   charts.splice(0,charts.length,...retained);
  }
- if(view==='platform-orders'){
-  columns=columns.filter(c=>!['ownerClerkUserId','agentId'].includes(c.key));
+ if(['platform','platform-orders'].includes(view)){
+  if(view==='platform-orders')columns=columns.filter(c=>!['ownerClerkUserId','agentId'].includes(c.key));
   const strategies=unique([...current.os,...current.es].map(x=>x.positionMethod||'未记录'));
   const strategyRows=strategies.map(name=>{
    const os=current.os.filter(o=>(o.positionMethod||'未记录')===name),es=current.es.filter(e=>(e.positionMethod||'未记录')===name);
@@ -147,7 +150,7 @@ export function operations(d,identity,input,r){
   const results=charts.find(c=>c.title==='结果分布');
   const counts=new Map(results.rows.map(row=>[row.name,row.value]));
   results.rows=Object.entries(statusLabels).map(([state,name])=>({name,value:counts.get(state)||0}));
-  results.showValues=true;
+  results.showValues=true;results.filter='analysisState';
  }
  if(view==='quality'){rows=[...d.executions,...d.platformExecutions].filter(e=>e.attributionStatus!=='ATTRIBUTED'&&within(e.executedAt,effective)&&textMatch(e));columns=[column('sourceEventKey','流水'),column('scope','业务范围'),column('attributionStatus','归属状态'),column('executedAt','发生时间','date'),column('actualFilledValue','金额 USDT','money')];metrics=[metric('count','归属待确认流水',rows.length,'条')];charts.length=0;bars('归属异常分布',group(rows,'attributionStatus'),'value','name','条',null);notes=['待确认流水排除在正式成交汇总之外；按原始 scope 标记，不猜测归属。'];}
  if(view==='users'){
@@ -174,7 +177,7 @@ export function operations(d,identity,input,r){
  if(view==='overview'){
   const latestTrade=new Map(),periodTrades=Map.groupBy(current.es,e=>e.ownerClerkUserId);
   for(const e of eligible){if(e.executionKind!=='TRADE'||new Date(e.executedAt)>=new Date(effective.to))continue;const last=latestTrade.get(e.ownerClerkUserId);if(!last||new Date(e.executedAt)>new Date(last))latestTrade.set(e.ownerClerkUserId,e.executedAt);}
-  rows=rows.map(u=>({...u,displayName:u.email||u.id,lastActiveAt:latestTrade.get(u.id)||null,filled:unique((periodTrades.get(u.id)||[]).map(e=>e.orderId)).length}));
+  rows=rows.map(u=>({...u,displayName:u.email||'邮箱未获取',lastActiveAt:latestTrade.get(u.id)||null,filled:unique((periodTrades.get(u.id)||[]).map(e=>e.orderId)).length}));
   columns=[column('displayName','用户'),column('registeredAt','注册时间','date'),column('lastActiveAt','最近活跃','date'),column('stage','阶段'),column('filled','本期成交订单','number'),column('volume','本期成交额 USDT','money')];
   notes.push('用户运营明细：最近活跃为截至期末已收录的最近真实成交时间，不代表登录或访问时间；本期成交订单按订单 ID 去重。');
   const cohort=registrationCohort(users.filter(u=>clerk.some(c=>c.id===u.id)),d.bindings,d.agents,d.executions,effective,effective.to),known=identity.status==='AVAILABLE';
@@ -190,26 +193,25 @@ export function operations(d,identity,input,r){
   const cohort=registrationCohort(users.filter(u=>clerk.some(c=>c.id===u.id)),d.bindings,d.agents,d.executions,effective,effective.to);
   const recent=new Map();for(const e of eligible){if(e.executionKind!=='TRADE'||new Date(e.executedAt)>=new Date(effective.to))continue;if(!recent.has(e.ownerClerkUserId)||new Date(e.executedAt)>new Date(recent.get(e.ownerClerkUserId)))recent.set(e.ownerClerkUserId,e.executedAt);}
   const trades=Map.groupBy(current.es,e=>e.ownerClerkUserId);
-  rows=rows.map(u=>({...u,displayName:u.email||u.id,lastActiveAt:recent.get(u.id)||null,filled:unique((trades.get(u.id)||[]).map(e=>e.orderId)).length}));
+  rows=rows.map(u=>({...u,displayName:u.email||'邮箱未获取',lastActiveAt:recent.get(u.id)||null,filled:unique((trades.get(u.id)||[]).map(e=>e.orderId)).length}));
   columns=[column('displayName','用户'),column('registeredAt','注册时间','date'),column('lastActiveAt','最近活跃','date'),column('stage','阶段'),column('filled','本期成交订单','number'),column('volume','本期成交额 USDT','money')];
   charts.splice(0,charts.length,registered,{...funnel,title:'新用户转化漏斗',type:'funnel',observing:cohort.observing},
-   {title:'注册批次成交留存',type:'retention',rows:identity.status==='AVAILABLE'?registrationRetention(users,eligible,effective):[],key:'sample',label:'name',unit:'%',filter:null},
    {title:'用户阶段分布',type:'progress',rows:options.stage.map(name=>({name,value:users.filter(u=>u.stage===name).length})),key:'value',label:'name',unit:'人',filter:'stage',note:'当前状态 · 互斥阶段 · 人数'});
   notes.push('批次成交留存：按北京时间注册周分组，统计注册后第 1、7、30 个自然日发生真实成交的用户。仅观察日完整结束的用户进入该列分母；未成熟显示观察中。仅代表成交活跃，不代表访问留存。最近活跃按已收录的最近真实成交时间统计。');
  }
  if(view==='agents'){
   const daily=series.map(row=>{const os=current.os.filter(o=>day(o.createdAt)===row.date),es=current.es.filter(e=>day(e.executedAt)===row.date);let previousExecuted=null;
    if(previous){const from=Math.max(+new Date(effective.from),+new Date(row.date+'T00:00:00+08:00')),to=Math.min(+new Date(effective.to),+new Date(row.date+'T00:00:00+08:00')+86400000),offset=+new Date(previous.from)-new Date(effective.from);previousExecuted=flows({from:new Date(from+offset).toISOString(),to:new Date(to+offset).toISOString()}).executedAgents;}
-   return {...row,executed:unique(os.map(o=>o.agentId)).length,traded:unique(es.map(e=>e.agentId)).length,previousExecuted};});
+   const ordering=new Set(unique(os.map(o=>o.agentId))),trading=unique(es.map(e=>e.agentId));const both=trading.filter(id=>ordering.has(id)).length;
+   return {...row,executed:ordering.size,traded:trading.length,both,tradedWithoutNewOrder:trading.length-both,previousExecuted};});
   const modelIds=unique([...current.os.map(o=>o.modelId||'未记录'),...current.es.map(e=>e.modelId||'未记录')]);
   const modelRows=modelIds.map(modelId=>{const os=current.os.filter(o=>(o.modelId||'未记录')===modelId),es=current.es.filter(e=>(e.modelId||'未记录')===modelId);return {name:modelId,value:sum(es,e=>e.actualFilledValue),users:unique(es.map(e=>e.ownerClerkUserId)).length,filled:unique(es.map(e=>e.orderId)).length,orders:os.length,failed:os.filter(o=>o.state==='FAILED').length,rate:os.length?os.filter(o=>o.state==='FAILED').length/os.length*100:null};}).sort((a,b)=>new Decimal(b.value).cmp(a.value));
   charts.splice(0,charts.length,{title:'每日实际下单 Agent 趋势',type:'trend',rows:daily,key:'executed',label:'date',unit:'个',axis:'Agent 数',previousKey:previous?'previousExecuted':null,filter:'date',source:'PG 用户订单 · 按创建时间去重 Agent'},
    {title:'模型成交贡献',type:'progress',rows:modelRows,key:'value',label:'name',unit:'USDT',filter:'model',note:'已归属实际成交额 · 使用用户与样本量见悬浮'},
-   {title:'下单与成交对比',type:'comparison',rows:daily,key:'executed',secondKey:'traded',label:'date',unit:'个',axis:'Agent 数',filter:'date',source:'每日去重 Agent · 下单按创建时间，成交按流水时间'},
-   {title:'异常待处理',type:'progress',rows:group(current.os.filter(o=>o.state==='FAILED'),'failureReason'),key:'value',label:'name',unit:'笔',filter:'reason',note:'本期创建且当前失败的订单 · 点击原因查看对应记录'});
+   {title:'每日下单与成交 Agent 活跃对比',type:'comparison',rows:daily,key:'executed',secondKey:'traded',label:'date',unit:'个',axis:'Agent 数',filter:'date',source:'PG 用户订单及已归属真实成交 · 北京时间 · 每日分别去重 Agent',note:'当日下单：当天创建订单的 Agent；当日成交：当天发生真实成交的 Agent，包含此前创建的订单。两组不是同一订单批次，成交 Agent 可能多于下单 Agent，不能相除作为转化率。各日人数不可直接相加作为周期去重人数。'});
   const executedUsers=p=>unique(p.os.map(o=>o.ownerClerkUserId)).length;
   metrics=[metric('configured','本期配置用户',current.configured,'人'),metric('executedUsers','本期下单用户',executedUsers(current),'人'),metric('executedAgents','本期下单 Agent',current.executedAgents,'个'),metric('tradeAgents','本期成交 Agent',current.tradeAgents,'个'),metric('filled','本期成交订单',current.filled,'笔'),metric('rate','订单当前失败率',current.rate,'%',{kind:'rate',badUp:true})].map(m=>{const before=m.key==='executedUsers'?(prior?executedUsers(prior):null):prior?.[m.key]??null;return {...m,previous:before,change:compare(m.value,before,m.kind)};});
-  rows=rows.map(a=>{const es=current.es.filter(e=>e.agentId===a.id),history=eligible.filter(e=>e.agentId===a.id&&e.executionKind==='TRADE'&&new Date(e.executedAt)<new Date(effective.to));const failed=current.os.filter(o=>o.agentId===a.id&&o.state==='FAILED');return {...a,displayName:(a.name||a.id)+' / '+(baseUsers.find(u=>u.id===a.clerkUserId)?.email||a.clerkUserId),registeredAt:a.createdAt,lastActiveAt:history.reduce((last,e)=>!last||new Date(e.executedAt)>new Date(last)?e.executedAt:last,null),stage:history.length?'已成交':a.liveEnabled?'已开启未成交':'已配置未开启',filled:unique(es.map(e=>e.orderId)).length,failed:failed.length,latestFailure:failed.sort((x,y)=>new Date(y.createdAt)-new Date(x.createdAt))[0]||null};});
+  rows=rows.map(a=>{const es=current.es.filter(e=>e.agentId===a.id),history=eligible.filter(e=>e.agentId===a.id&&e.executionKind==='TRADE'&&new Date(e.executedAt)<new Date(effective.to));const failed=current.os.filter(o=>o.agentId===a.id&&o.state==='FAILED');return {...a,displayName:(a.name||a.id)+' / '+(userEmails.get(a.clerkUserId)||'邮箱未获取'),registeredAt:a.createdAt,lastActiveAt:history.reduce((last,e)=>!last||new Date(e.executedAt)>new Date(last)?e.executedAt:last,null),stage:history.length?'已成交':a.liveEnabled?'已开启未成交':'已配置未开启',filled:unique(es.map(e=>e.orderId)).length,failed:failed.length,latestFailure:failed.sort((x,y)=>new Date(y.createdAt)-new Date(x.createdAt))[0]||null};});
   columns=[column('displayName','Agent / 所属用户'),column('registeredAt','创建时间','date'),column('lastActiveAt','最近成交','date'),column('stage','阶段'),column('filled','本期成交订单','number'),column('volume','本期成交额 USDT','money')];
   notes.push('实际下单 Agent 仅统计已创建真实用户订单的去重 Agent，不代表全部策略执行或模型调用。异常按失败订单 ID 统计，不将当前资金同步标记当成历史异常次数；Agent 详情包含最新失败订单和原因。');
  }
@@ -240,6 +242,60 @@ export function operations(d,identity,input,r){
    {title:'市场累计金额',type:'bars',rows:marketOrders,key:'amount',label:'name',unit:'USDT',filter:'market',showValues:true,note:'按订单创建日期统计请求金额 · 包含未成交及失败订单'},
    ranking);
  }
+ const attributionNote='待归属成交流水：已获取交易流水，但尚未准确关联订单、Agent 或模型；不等于成交失败或资金丢失。待归属及归属冲突流水暂不计入正式成交额、成交 Agent 和模型盈亏，已归属且可计算部分仍正常统计。';
+ const partialNote='盈亏数据不完整（PARTIAL）：存在待归属、归属冲突、历史成本或手续费信息不完整等问题；当前金额仅为已归属可计算部分，不代表账户完整净盈亏，也不是订单部分成交。';
+ rows=rows.map(row=>{const issues=row.issues||[];const descriptions=[];
+  if(row.attributionStatus==='UNATTRIBUTED'||issues.includes('待归属成交流水')||issues.includes('未归属成交')||row.coverage==='存在待归属流水')descriptions.push(attributionNote);
+  if(row.attributionStatus==='CONFLICT'||issues.includes('归属冲突'))descriptions.push('归属冲突：流水的关联证据不一致，暂不能确定归属；排除在正式成交及盈亏汇总之外，不表示成交失败。');
+  if(row.status==='PARTIAL')descriptions.push(partialNote);
+  return descriptions.length?{...row,dataExplanation:descriptions.join(' ')}:row;
+ });
+ if(['funds','platform','platform-pnl','events','quality'].includes(view))notes.push(attributionNote,partialNote);
+ // Detail filters retain the time basis used by the originating chart.
+ if(['order-list','platform-orders'].includes(view)&&input.get('orderBasis')==='traded'){
+  const tradedIds=new Set(current.es.map(e=>e.orderId));
+  rows=orderCandidates.filter(o=>tradedIds.has(o.id)).map(o=>({...o,amount:sum(current.es.filter(e=>e.orderId===o.id),e=>e.actualFilledValue),side:unique(current.es.filter(e=>e.orderId===o.id).map(e=>e.side)).join(' / ')}));
+  columns=columns.map(c=>c.key==='amount'?{...c,label:'本期成交额 USDT'}:c);
+ }
+ if(view==='executions'){
+  const buckets=new Map(),seen=new Set();
+  rows.forEach((e,index)=>{
+   const identity=[e.ownerClerkUserId,e.agentId,e.orderId];
+   if(e.sourceEventKey){const source=JSON.stringify([...identity,e.executionKind,e.sourceEventKey]);if(seen.has(source))return;seen.add(source);}
+   const key=JSON.stringify(e.orderId?[...identity]:[...identity,e.sourceEventKey||index]);
+   if(!buckets.has(key))buckets.set(key,[]);buckets.get(key).push(e);
+  });
+  rows=[...buckets.values()].filter(events=>events.some(e=>pick('executionKind',e.executionKind))).map(events=>{
+   const trades=events.filter(e=>e.executionKind==='TRADE'),settlements=events.filter(e=>e.executionKind==='SETTLEMENT');
+   const latest=list=>list.reduce((value,e)=>!value||new Date(e.executedAt)>new Date(value)?e.executedAt:value,null);
+   const fees=[...Map.groupBy(events,e=>e.feeType||'未记录')].map(([unit,list])=>`${sum(list,e=>e.feeAmount)} ${unit}`).join(' / ');
+   return {...events[0],sourceEventKey:unique(events.map(e=>e.sourceEventKey)).join(' / '),executionKind:trades.length&&settlements.length?'成交及结算':trades.length?'仅成交':'仅结算',executedAt:latest(events),tradeAt:latest(trades),settlementAt:latest(settlements),tradeAmount:sum(trades,e=>e.actualFilledValue),settlementAmount:sum(settlements,e=>e.actualFilledValue),tradeCount:trades.length,settlementCount:settlements.length,side:unique(trades.map(e=>e.side)).join(' / '),fees,events};
+  });
+  columns=[column('orderId','订单'),column('ownerClerkUserId','用户'),column('fixtureName','赛事'),column('executionKind','本期记录类型'),column('tradeAt','最近成交时间','date'),column('settlementAt','最近结算时间','date'),column('side','成交方向'),column('tradeAmount','本期成交金额 USDT','money'),column('settlementAmount','本期结算回款 USDT','money'),column('tradeCount','成交流水数','number'),column('settlementCount','结算流水数','number'),column('fees','本期手续费（按单位）')];
+  notes.push('成交与结算明细按用户、Agent 和订单合并为一行；成交金额与结算回款分别汇总所选期间的流水，不相加作为成交额。没有订单关联的流水单独保留。仅成交／仅结算表示本期记录类型，不代表订单最终结算状态；详情保留原始流水。');
+ }
+ if(view==='quality')rows=rows.filter(e=>pick('attribution',e.attributionStatus));
+ if(view==='analyses')rows=rows.filter(e=>pick('analysisState',e.stateLabel));
+ if(view==='agents'){
+  const activity=input.get('agentActivity');const active=new Set((activity==='traded'?current.es:current.os).map(x=>x.agentId));
+  rows=rows.filter(a=>pick('agent',a.id)&&(!activity||active.has(a.id)));
+ }
+ if(view==='user-list'){
+  const population=input.get('population');const cohort=registrationCohortMembers(users.filter(u=>clerk.some(c=>c.id===u.id)),d.bindings,d.agents,d.executions,effective,effective.to);
+  const activityIds=new Set((population==='ordered'?current.os:current.es).map(x=>x.ownerClerkUserId));
+  rows=rows.filter(u=>!population||population==='registered'&&within(u.registeredAt,effective)||population==='registeredEnd'&&clerk.some(c=>c.id===u.id)&&u.registeredAt&&new Date(u.registeredAt)<new Date(effective.to)||population==='boundEnd'&&clerk.some(c=>c.id===u.id)&&u.registeredAt&&new Date(u.registeredAt)<new Date(effective.to)&&d.bindings.some(b=>b.clerkUserId===u.id&&b.verifiedAt&&new Date(b.verifiedAt)<new Date(effective.to))||population==='configured'&&d.agents.some(a=>a.clerkUserId===u.id&&within(a.createdAt,effective))||population==='firstTraders'&&within(firstTrades.get(u.id),effective)||['traded','ordered'].includes(population)&&activityIds.has(u.id)||population.startsWith('cohort-')&&(cohort[population.slice(7)]||[]).some(x=>x.id===u.id));
+  charts.splice(0,charts.length,{title:'用户与 Agent 数量分布',type:'progress',rows:agentBands.map(name=>{const members=rows.filter(u=>agentBand(u.agentCount)===name);return {name,value:members.length,percentage:rows.length?members.length/rows.length*100:null,agentTotal:members.reduce((total,u)=>total+u.agentCount,0)};}),key:'value',label:'name',unit:'人',filter:'agentBand'}, {title:'用户阶段分布',type:'progress',rows:options.stage.map(name=>({name,value:rows.filter(u=>u.stage===name).length})),key:'value',label:'name',unit:'人',filter:'stage'});
+ }
+ if(['order-list','platform-orders'].includes(view))charts.length=0;
+ if(view==='agents'){const kept=charts.filter(c=>c.title!=='模型成交贡献');charts.splice(0,charts.length,...kept);}
+ if(view==='funds'){const kept=charts.filter(c=>c.key!=='volume');charts.splice(0,charts.length,...kept);}
+ if(view==='platform-pnl'){const kept=charts.filter(c=>!['平台模型成交额','平台模型盈亏分量'].includes(c.title));charts.splice(0,charts.length,...kept);}
+ if(view==='activity')charts.length=0;
+ if(view==='executions'){const kept=charts.filter(c=>c.title==='每日成交订单'||c.key==='volume');for(const c of kept)if(c.key==='volume'){c.title='每日成交金额';c.note='按实际成交日期统计 · 单位 USDT · 不含结算回款';}charts.splice(0,charts.length,...kept);}
+ const userIdRows=['overview','users','user-list','funds'].includes(view);
+ rows=rows.map(row=>({...row,userEmail:userEmails.get(row.ownerClerkUserId||row.clerkUserId||(userIdRows?row.id:null))||'邮箱未获取'}));
+ const userColumn=columns.some(c=>['ownerClerkUserId','clerkUserId'].includes(c.key)||(userIdRows&&c.key==='id'));
+ columns=columns.filter(c=>!(userColumn&&c.key==='email')).map(c=>['ownerClerkUserId','clerkUserId'].includes(c.key)||(userIdRows&&c.key==='id')?{...c,key:'userEmail',label:'用户邮箱'}:c);
  columns=columns.map(c=>c.key==='competition'?{...c,type:'market'}:c);
  const sort=input.get('sort')||(view==='platform'?'realizedPnl':view==='user-list'?'agentCount':['overview','users','agents'].includes(view)?'volume':null)||columns.find(c=>['money','number','date'].includes(c.type))?.key||columns[0].key;
  rows=sortRows(rows,columns.some(c=>c.key===sort)?sort:columns[0].key,input.get('direction'));
@@ -247,14 +303,19 @@ export function operations(d,identity,input,r){
  return {view,scope:view==='quality'?'跨业务数据质量':platform?'平台自有模型':'普通用户',asOf,clerkStatus:identity.status,clerkAsOf:identity.asOf,range:effective,previous,metrics,charts,notes,columns,options,eventRows,total:rows.length,items:input.get('export')==='1'?rows:rows.slice((page-1)*pageSize,page*pageSize),page,pageSize,sort,direction:input.get('direction')==='asc'?'asc':'desc'};
 }
 
-export function registrationCohort(users,bindings,agents,executions,r,asOf){
+export function registrationCohortMembers(users,bindings,agents,executions,r,asOf){
  const period=users.filter(u=>within(u.registeredAt,r));
  const mature=period.filter(u=>+new Date(u.registeredAt)+7*86400000<=+new Date(asOf));
  const window=(u,date)=>date&&+new Date(date)>=+new Date(u.registeredAt)&&+new Date(date)<+new Date(u.registeredAt)+7*86400000;
  const bound=mature.filter(u=>bindings.some(b=>b.clerkUserId===u.id&&window(u,b.verifiedAt)));
  const configured=bound.filter(u=>agents.some(a=>a.clerkUserId===u.id&&window(u,a.createdAt)));
  const traded=configured.filter(u=>executions.some(e=>e.ownerClerkUserId===u.id&&e.executionKind==='TRADE'&&e.attributionStatus==='ATTRIBUTED'&&e.agentId&&window(u,e.executedAt)));
- return {sample:mature.length,observing:period.length-mature.length,bound:bound.length,configured:configured.length,traded:traded.length,conversion:mature.length?traded.length/mature.length*100:null};
+ return {registered:mature,bound,configured,traded,observing:period.length-mature.length};
+}
+
+export function registrationCohort(users,bindings,agents,executions,r,asOf){
+ const c=registrationCohortMembers(users,bindings,agents,executions,r,asOf);
+ return {sample:c.registered.length,observing:c.observing,bound:c.bound.length,configured:c.configured.length,traded:c.traded.length,conversion:c.registered.length?c.traded.length/c.registered.length*100:null};
 }
 
 export function registrationRetention(users,executions,r){

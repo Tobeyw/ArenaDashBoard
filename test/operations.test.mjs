@@ -67,7 +67,7 @@ test('overview user details count distinct traded orders and exclude settlement 
 
 test('user page has reference panels and same seven-day cohort',()=>{
  const result=operations(d,c,new URLSearchParams({view:'users'}),r);
- assert.deepEqual(result.charts.map(x=>x.type),['line','funnel','retention','progress']);
+ assert.deepEqual(result.charts.map(x=>x.type),['line','funnel','progress']);
  assert.equal(result.charts[1].rows.length,4);
  assert.equal(result.columns[4].key,'filled');
 });
@@ -79,13 +79,13 @@ test('registration retention uses full Beijing observation days and excludes non
  assert.equal(result[0].cells[1].rate,null);assert.equal(result[1].cells[0].rate,null);
  assert.equal(result[1].cells[0].observing,1);
 });
-test('Agent charts deduplicate Agents and orders, and expose model sample sizes',()=>{
+test('Agent charts deduplicate Agents and orders without repeating model contribution',()=>{
  const e={ownerClerkUserId:'u',agentId:'a',modelId:'same-model',executionKind:'TRADE',attributionStatus:'ATTRIBUTED',actualFilledValue:'2',orderId:'o',executedAt:'2026-11-09T01:00:00Z'};
  const snapshot={...d,executions:[e,{...e}],orders:[...d.orders,{...d.orders[0],id:'o2'}]};
  const result=operations(snapshot,c,new URLSearchParams({view:'agents'}),r);
- assert.deepEqual(result.charts.map(x=>x.type),['trend','progress','comparison','progress']);
- assert.equal(result.charts[0].rows[0].executed,1);assert.equal(result.charts[2].rows[0].traded,1);
- const model=result.charts[1].rows[0];assert.equal(model.value,'4');assert.equal(model.filled,1);assert.equal(model.users,1);assert.equal(model.orders,2);
+ assert.deepEqual(result.charts.map(x=>x.type),['trend','comparison']);
+ assert.equal(result.charts[0].rows[0].executed,1);assert.equal(result.charts[1].rows[0].traded,1);
+ assert.equal(result.charts.some(c=>c.title==='模型成交贡献'),false);
  assert.equal(result.items[0].filled,1);assert.ok(result.items[0].latestFailure);
  assert.equal(operations(snapshot,c,new URLSearchParams({view:'agents',q:'a'}),r).total,1);
 });
@@ -112,18 +112,18 @@ test('failure page compares daily current statuses, fills gaps, and respects exp
  assert.equal(chart.rows.length,3);assert.equal(chart.rows[0].FAILED,0);
  assert.equal(chart.rows[1].PENDING,1);assert.equal(chart.rows[2].FILLED,1);assert.equal(chart.rows[2].FAILED,1);assert.equal(chart.rows[2].AMBIGUOUS,0);
  assert.equal(new Set(chart.seriesKeys.map(k=>chart.seriesColors[k])).size,7);
- assert.equal(chart.seriesLabels.FAILED,'失败');assert.equal(result.total,3);
+ assert.equal(chart.seriesLabels.FAILED,'失败');assert.equal(result.total,1);assert.equal(result.items[0].state,'FAILED');
  assert.deepEqual(result.charts[1].rows,[{name:'timeout',value:1}]);
  const filtered=operations(snapshot,c,new URLSearchParams({view:'failures',status:'FILLED'}),range);
- assert.equal(filtered.total,1);assert.equal(filtered.charts[0].rows[2].FAILED,0);assert.equal(filtered.charts[0].rows[2].FILLED,1);assert.deepEqual(filtered.charts[1].rows,[]);
+ assert.equal(filtered.total,0);assert.equal(filtered.charts[0].rows[2].FAILED,0);assert.equal(filtered.charts[0].rows[2].FILLED,1);assert.deepEqual(filtered.charts[1].rows,[]);
 });
 
 
-test('platform order strategy analysis isolates platform data and uses execution dates and snapshots',()=>{
+test('platform overview strategy analysis isolates platform data and uses execution dates and snapshots',()=>{
  const order={...d.platformOrders[0],positionMethod:'FIXED',competition:'EPL'};
- const execution={platformModelAccountId:'p',platformOrderId:'po',modelId:'same-model',competition:'EPL',executionKind:'TRADE',attributionStatus:'ATTRIBUTED',executedAt:'2026-11-09T02:00:00Z',actualFilledValue:'3'};
+ const execution={actualFilledShares:'1',feeAmount:'0',feeType:'COLLATERAL',platformModelAccountId:'p',platformOrderId:'po',modelId:'same-model',competition:'EPL',executionKind:'TRADE',attributionStatus:'ATTRIBUTED',executedAt:'2026-11-09T02:00:00Z',actualFilledValue:'3'};
  const snapshot={...d,platformOrders:[order,{...order,id:'failed',state:'FAILED',requestedStake:'5'},{...order,id:'old',positionMethod:'FRACTIONAL_KELLY',createdAt:'2026-11-01T00:00:00Z'},{...order,id:'missing',positionMethod:null}],platformExecutions:[execution,{...execution,actualFilledValue:'2'},{...execution,platformOrderId:'old',actualFilledValue:'7'},{...execution,executionKind:'SETTLEMENT',actualFilledValue:'100'}]};
- const get=params=>operations(snapshot,c,new URLSearchParams({view:'platform-orders',...params}),r).charts.find(x=>x.type==='strategyAnalysis');
+ const get=params=>operations(snapshot,c,new URLSearchParams({view:'platform',...params}),r).charts.find(x=>x.type==='strategyAnalysis');
  const chart=get({}),fixed=chart.rows.find(x=>x.name==='FIXED');
  assert.equal(fixed.orders,2);assert.equal(fixed.requested,'25');assert.equal(fixed.filled,1);assert.equal(fixed.volume,'5');assert.equal(fixed.failed,1);assert.equal(fixed.rate,50);
  const old=chart.rows.find(x=>x.name==='FRACTIONAL_KELLY');assert.equal(old.orders,0);assert.equal(old.filled,1);assert.equal(old.volume,'7');assert.equal(old.rate,null);
@@ -142,4 +142,88 @@ test('market overview compares order counts and requested amounts before event r
  assert.equal(result.charts[0].key,'orders');assert.equal(result.charts[1].key,'amount');
  const selected=operations(snapshot,c,new URLSearchParams({view:'events',market:'NBA'}),r);
  assert.deepEqual(selected.charts[1].rows,[{name:'NBA',orders:1,amount:'7'}]);
+});
+
+
+test('Agent daily comparison explains independent activity sets without inferring conversion',()=>{
+ const e={ownerClerkUserId:'u',agentId:'a',executionKind:'TRADE',attributionStatus:'ATTRIBUTED',actualFilledValue:'1',orderId:'o',executedAt:'2026-11-09T01:00:00Z'};
+ const snapshot={...d,executions:[e,{...e},{...e,agentId:'old-agent',orderId:'old'},{...e,agentId:'settled-only',executionKind:'SETTLEMENT'}]};
+ const result=operations(snapshot,c,new URLSearchParams({view:'agents'}),r);
+ const chart=result.charts.find(x=>x.type==='comparison'),row=chart.rows[0];
+ assert.equal(row.executed,1);assert.equal(row.traded,2);assert.equal(row.both,1);assert.equal(row.tradedWithoutNewOrder,1);
+ assert.equal(row.both+row.tradedWithoutNewOrder,row.traded);assert.match(chart.note,/不能相除作为转化率/);
+ const empty=operations({...d,orders:[],executions:[]},c,new URLSearchParams({view:'agents'}),r).charts.find(x=>x.type==='comparison').rows[0];
+ assert.equal(empty.both,0);assert.equal(empty.tradedWithoutNewOrder,0);
+});
+
+
+test('user information displays email while keeping identity keys for links and filtering',()=>{
+ const identity={...c,users:c.users.map(u=>({...u,email:u.id==='u'?'member@example.test':'platform@example.test'}))};
+ for(const view of ['overview','users','user-list','agents','orders','order-list','failures']){
+  const result=operations(d,identity,new URLSearchParams({view}),r),row=result.items[0];
+  assert.equal(row.userEmail,'member@example.test',view);
+  assert.equal(result.columns.some(c=>['ownerClerkUserId','clerkUserId'].includes(c.key)),false,view);
+  if(['overview','users','agents'].includes(view))assert.ok(row.displayName.includes('member@example.test'),view);
+ }
+ const orders=operations(d,identity,new URLSearchParams({view:'order-list',q:'member@example.test'}),r);
+ assert.equal(orders.total,1);assert.equal(orders.items[0].ownerClerkUserId,'u');
+ const missing=operations(d,c,new URLSearchParams({view:'users'}),r);
+ assert.equal(missing.items[0].displayName,'邮箱未获取');assert.equal(missing.items[0].id,'u');
+ assert.deepEqual(missing.charts.map(c=>c.type),['line','funnel','progress']);
+});
+
+
+test('unattributed and conflicting execution details include meaning and reporting impact',()=>{
+ const base={ownerClerkUserId:'u',executionKind:'TRADE',executedAt:'2026-11-09T01:00:00Z',actualFilledValue:'2'};
+ const snapshot={...d,executions:[{...base,attributionStatus:'UNATTRIBUTED',sourceEventKey:'unmatched'},{...base,attributionStatus:'CONFLICT',sourceEventKey:'conflicting'}]};
+ const out=operations(snapshot,c,new URLSearchParams({view:'quality'}),r);
+ assert.equal(out.columns.some(c=>c.key==='dataExplanation'),false);
+ assert.match(out.items.find(x=>x.sourceEventKey==='unmatched').dataExplanation,/不等于成交失败/);
+ assert.match(out.items.find(x=>x.sourceEventKey==='conflicting').dataExplanation,/排除在正式成交/);
+ assert.ok(out.notes.some(n=>n.includes('PARTIAL')));
+ assert.equal(operations(snapshot,c,new URLSearchParams({view:'orders'}),r).metrics.find(m=>m.key==='volume').value,'0');
+});
+
+
+test('trade-date order drill includes older orders and sums only selected-period trades',()=>{
+ const order={...d.orders[0],id:'old',createdAt:'2026-11-01T00:00:00Z',state:'FILLED'};
+ const e={ownerClerkUserId:'u',agentId:'a',orderId:'old',executionKind:'TRADE',attributionStatus:'ATTRIBUTED',executedAt:'2026-11-09T01:00:00Z',actualFilledValue:'2'};
+ const snap={...d,orders:[order,...d.orders],executions:[e,{...e,actualFilledValue:'3'},{...e,executedAt:'2026-11-01T01:00:00Z',actualFilledValue:'100'},{...e,executionKind:'SETTLEMENT',actualFilledValue:'20'}]};
+ const get=filters=>operations(snap,c,new URLSearchParams({view:'order-list',...filters}),r);
+ assert.deepEqual(get({}).items.map(x=>x.id),['o']);
+ const traded=get({orderBasis:'traded'});assert.equal(traded.total,1);assert.equal(traded.items[0].id,'old');assert.equal(traded.items[0].amount,'5');assert.equal(traded.charts.length,0);
+ assert.equal(get({orderBasis:'traded',status:'FAILED'}).total,0);
+ const trades=operations(snap,c,new URLSearchParams({view:'executions',executionKind:'TRADE'}),r);
+ const settlements=operations(snap,c,new URLSearchParams({view:'executions',executionKind:'SETTLEMENT'}),r);
+ assert.equal(trades.total,1);assert.equal(settlements.total,1);assert.equal(trades.items[0].tradeAmount,'5');assert.equal(trades.items[0].settlementAmount,'20');assert.equal(trades.items[0].events.length,3);
+});
+test('cohort detail uses same mature batch and sequential intersections as overview funnel',()=>{
+ const identity={status:'AVAILABLE',users:[{id:'u',email:'a@test',registeredAt:'2026-11-01T00:00:00Z'},{id:'young',registeredAt:'2026-11-08T00:00:00Z'}]};
+ const snap={...d,bindings:[{clerkUserId:'u',verifiedAt:'2026-11-02T00:00:00Z'}],agents:[{id:'a',clerkUserId:'u',createdAt:'2026-11-03T00:00:00Z'}],executions:[{ownerClerkUserId:'u',agentId:'a',executionKind:'TRADE',attributionStatus:'ATTRIBUTED',executedAt:'2026-11-04T00:00:00Z',actualFilledValue:'1',orderId:'o'}]};
+ const period={...r,from:'2026-10-31T16:00:00Z'};
+ const overview=operations(snap,identity,new URLSearchParams({view:'users'}),period);
+ const funnel=overview.charts.find(c=>c.type==='funnel');
+ for(const [index,population] of ['registered','bound','configured','traded'].entries()){
+  const out=operations(snap,identity,new URLSearchParams({view:'user-list',population:'cohort-'+population}),period);
+  assert.equal(out.total,funnel.rows[index].value);assert.equal(out.items[0].id,'u');
+ }
+ assert.equal(operations(snap,identity,new URLSearchParams({view:'user-list',population:'registered'}),r).total,0);
+});
+test('detail pages honor Agent activity and user search transferred to orders',()=>{
+ const snap={...d,agents:[...d.agents,{id:'inactive',clerkUserId:'u'}]};
+ const out=operations(snap,c,new URLSearchParams({view:'agents',agentActivity:'ordered'}),r);
+ assert.equal(out.total,1);assert.equal(out.items[0].id,'a');
+ assert.equal(operations(snap,c,new URLSearchParams({view:'agents',agentActivity:'traded'}),r).total,0);
+ const identity={...c,users:c.users.map(u=>({...u,email:'member@example.test'}))};
+ assert.equal(operations(snap,identity,new URLSearchParams({view:'order-list',q:'member@example.test',searchScope:'users'}),r).total,1);
+});
+
+test('execution table merges by owner Agent and order, retaining unlinked and unmatched rows',()=>{
+ const base={ownerClerkUserId:'u',agentId:'a',executionKind:'TRADE',attributionStatus:'ATTRIBUTED',executedAt:'2026-11-09T01:00:00Z',actualFilledValue:'2'};
+ const buy={...base,orderId:'o',sourceEventKey:'buy'};
+ const result=operations({...d,executions:[buy,{...buy},{...buy,sourceEventKey:'settle',executionKind:'SETTLEMENT',actualFilledValue:'7'},{...base,orderId:'other'},{...base,sourceEventKey:'unlinked1'},{...base,sourceEventKey:'unlinked2'},{...base,orderId:'o',agentId:'different'}]},c,new URLSearchParams({view:'executions'}),r);
+ assert.equal(result.total,5);
+ const merged=result.items.find(e=>e.orderId==='o'&&e.agentId==='a');
+ assert.equal(merged.tradeAmount,'2');assert.equal(merged.settlementAmount,'7');assert.equal(merged.tradeCount,1);assert.equal(merged.settlementCount,1);
+ assert.ok(result.charts.some(c=>c.key==='volume'));
 });

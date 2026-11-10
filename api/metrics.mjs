@@ -26,7 +26,7 @@ export function periodPnl(rows,r){
   const issues=[]; const executions=[];
   for(const e of eligible){
    if(e.attributionStatus==='CONFLICT'){issues.push('归属冲突');continue;}
-   if(e.attributionStatus!=='ATTRIBUTED'||!e.agentId){issues.push('未归属成交');continue;}
+   if(e.attributionStatus!=='ATTRIBUTED'||!e.agentId){issues.push('待归属成交流水');continue;}
    if(e.executionKind==='TRADE'&&(e.feeAmount===null||!['SHARES','COLLATERAL'].includes(e.feeType)))issues.push('费用证据不完整');
    const kind=e.executionKind==='SETTLEMENT'?'SETTLEMENT':e.side;
    if(!['BUY','SELL','SETTLEMENT'].includes(kind)){issues.push('未知成交方向');continue;}
