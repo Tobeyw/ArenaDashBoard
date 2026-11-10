@@ -138,13 +138,24 @@ test('market overview accumulates daily orders and requested amounts before even
  const snapshot={...d,orders:[order,{...order,id:'o2',state:'PENDING',requestedStake:'2.5'},{...order,id:'nba',competition:'NBA',requestedStake:'7'},{...order,id:'old',createdAt:'2026-11-01T00:00:00Z',requestedStake:'100'}]};
  const result=operations(snapshot,c,new URLSearchParams({view:'events'}),r);
  assert.deepEqual(result.charts.map(x=>x.title),['每日累计订单数','每日累计下单金额','比赛盈亏排名']);
- assert.deepEqual(result.charts[0].rows,[{date:'2026-11-09',orders:3,amount:'19.5'}]);
+ assert.deepEqual(result.charts[0].rows.map(({date,orders,amount})=>({date,orders,amount})),[{date:'2026-11-09',orders:3,amount:'19.5'}]);
  assert.equal(result.charts[0].key,'orders');assert.equal(result.charts[1].key,'amount');
  const selected=operations(snapshot,c,new URLSearchParams({view:'events',market:'NBA'}),r);
- assert.deepEqual(selected.charts[1].rows,[{date:'2026-11-09',orders:1,amount:'7'}]);
+ assert.deepEqual(selected.charts[1].rows.map(({date,orders,amount})=>({date,orders,amount})),[{date:'2026-11-09',orders:1,amount:'7'}]);
  const extended=operations({...snapshot,orders:[...snapshot.orders,{...order,id:'earlier',createdAt:'2026-11-07T01:00:00Z',requestedStake:'0.1'},{...order,id:'earlier',createdAt:'2026-11-07T01:00:00Z',requestedStake:'0.1'}]},c,new URLSearchParams({view:'events'}),{...r,kind:'custom',from:'2026-11-05T16:00:00Z'});
- assert.deepEqual(extended.charts[0].rows,[{date:'2026-11-06',orders:0,amount:'0'},{date:'2026-11-07',orders:1,amount:'0.1'},{date:'2026-11-08',orders:1,amount:'0.1'},{date:'2026-11-09',orders:4,amount:'19.6'}]);
+ assert.deepEqual(extended.charts[0].rows.map(({date,orders,amount})=>({date,orders,amount})),[{date:'2026-11-06',orders:0,amount:'0'},{date:'2026-11-07',orders:1,amount:'0.1'},{date:'2026-11-08',orders:1,amount:'0.1'},{date:'2026-11-09',orders:4,amount:'19.6'}]);
  assert.equal(extended.charts[1].cumulativeOrders,true);
+ const count=result.charts[0],amount=result.charts[1];
+ const key=market=>count.seriesKeys.find(k=>count.seriesLabels[k]===market);
+ assert.equal(count.rows[0][key('EPL')],2);assert.equal(count.rows[0][key('NBA')],1);
+ assert.equal(amount.rows[0][key('EPL')],'12.5');assert.equal(amount.rows[0][key('NBA')],'7');
+ assert.notEqual(count.seriesColors[key('EPL')],count.seriesColors[key('NBA')]);
+ assert.deepEqual(count.seriesColors,amount.seriesColors);
+ assert.equal(selected.charts[1].seriesKeys.length,1);
+ assert.equal(selected.charts[1].seriesColors[key('NBA')],count.seriesColors[key('NBA')]);
+ assert.deepEqual(extended.charts[0].rows.map(row=>row[key('EPL')]),[0,1,1,3]);
+ assert.deepEqual(extended.charts[1].rows.map(row=>row[key('NBA')]),['0','0','0','7']);
+
 
 });
 

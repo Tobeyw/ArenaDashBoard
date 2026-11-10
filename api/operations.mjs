@@ -128,7 +128,8 @@ export function operations(d,identity,input,r){
   const models=d.platform.filter(m=>pick('model',m.modelId)).map(m=>m.modelId);
   const balances=days.map(date=>{const row={date};for(const model of models){const snapshots=(d.platformSnapshots||[]).filter(s=>s.modelId===model&&day(s.asOf)===date&&new Date(s.asOf)<new Date(effective.to));row[model]=snapshots.at(-1)?.cashBalance??null;}return row;});
   charts.push({title:'平台各模型每日现金余额',type:'multi',rows:balances,key:models[0],seriesKeys:models,label:'date',unit:'USDT',filter:null,footnotes:[
-   '账户总金额（账户总价值）＝现金余额＋持仓当前价值，三者须按同一模型、同一快照时点比较。',
+   '总账户余额（账户总价值）＝现金余额＋持仓当前价值。本图只展示现金部分，不是总账户余额；三者须按同一模型、同一快照时点比较。',
+   '例如：现金余额 200 USDT，持仓当前价值 300 USDT，则总账户余额为 500 USDT（仅用于说明计算关系）。',
    '现金余额是模型账户的链上 USDT 余额，不含持仓价值；持仓当前价值按当前估值计算，不是买入成本。买入会将现金转为持仓，因此现金减少不等于亏损，卖出或结算回款也不等于全部盈利。',
    '现金余额未扣除未完成订单的预留金额，不等于可下单额度。本图按北京时间取每天最后一条已收录快照；缺失日期留空、断线，不补零。'
   ]});
@@ -250,15 +251,26 @@ export function operations(d,identity,input,r){
  }
  if(view==='events'){
   const ranking=charts.find(c=>c.title==='比赛盈亏排名');
+  const palette=['#397bf1','#8959e9','#18b1a2','#f78b26','#e44396','#08a75c','#11a6c2','#8495ac'];
+  const allMarkets=unique(d.orders.map(o=>o.competition||'未记录')).sort();
+  const activeMarkets=new Set(current.os.map(o=>o.competition||'未记录'));
+  const markets=allMarkets.filter(name=>activeMarkets.has(name));
+  const marketKeys=markets.map(name=>'market:'+allMarkets.indexOf(name));
+  const seriesLabels=Object.fromEntries(markets.map((name,i)=>[marketKeys[i],name]));
+  const seriesColors=Object.fromEntries(markets.map((name,i)=>{const n=allMarkets.indexOf(name);return [marketKeys[i],palette[n]||`hsl(${(n*137.508)%360} 60% 45%)`];}));
+  const totals=new Map(markets.map(name=>[name,{orders:0,amount:new Decimal(0)}]));
   const seenOrders=new Set();let orderTotal=0,amountTotal=new Decimal(0);
   const dailyOrders=Map.groupBy(current.os,o=>day(o.createdAt));
   const cumulativeOrders=days.map(date=>{
-   for(const order of dailyOrders.get(date)||[]){if(seenOrders.has(order.id))continue;seenOrders.add(order.id);orderTotal++;amountTotal=amountTotal.plus(order.requestedStake||0);}
-   return {date,orders:orderTotal,amount:amountTotal.toString()};
+   for(const order of dailyOrders.get(date)||[]){if(seenOrders.has(order.id))continue;seenOrders.add(order.id);orderTotal++;amountTotal=amountTotal.plus(order.requestedStake||0);const total=totals.get(order.competition||'未记录');total.orders++;total.amount=total.amount.plus(order.requestedStake||0);}
+   const row={date,orders:orderTotal,amount:amountTotal.toString(),marketOrders:{},marketAmounts:{}};
+   markets.forEach((name,i)=>{row.marketOrders[marketKeys[i]]=totals.get(name).orders;row.marketAmounts[marketKeys[i]]=totals.get(name).amount.toString();});
+   return row;
   });
+  const marketSeries={type:'line',seriesKeys:marketKeys,seriesLabels,seriesColors,seriesLabelType:'market',label:'date',filter:'date',cumulativeOrders:true};
   charts.splice(0,charts.length,
-   {title:'每日累计订单数',type:'line',rows:cumulativeOrders,key:'orders',label:'date',unit:'笔',filter:'date',cumulativeOrders:true,integerTicks:true,axis:'累计订单数（笔）',note:'所选周期内按创建日期累加 · 订单 ID 去重'},
-   {title:'每日累计下单金额',type:'line',rows:cumulativeOrders,key:'amount',label:'date',unit:'USDT',filter:'date',cumulativeOrders:true,axis:'累计下单金额（USDT）',note:'所选周期内累计请求金额 · 包含未成交及失败订单'},
+   {...marketSeries,title:'每日累计订单数',rows:cumulativeOrders.map(({marketOrders,marketAmounts,...row})=>({...row,...marketOrders})),key:'orders',unit:'笔',integerTicks:true,axis:'累计订单数（笔）',note:'各市场分别累计 · 所选周期内按创建日期累加 · 订单 ID 去重'},
+   {...marketSeries,title:'每日累计下单金额',rows:cumulativeOrders.map(({marketOrders,marketAmounts,...row})=>({...row,...marketAmounts})),key:'amount',unit:'USDT',axis:'累计下单金额（USDT）',note:'各市场分别累计请求金额 · 包含未成交及失败订单'},
    ranking);
  }
  const attributionNote='待归属成交流水：已获取交易流水，但尚未准确关联订单、Agent 或模型；不等于成交失败或资金丢失。待归属及归属冲突流水暂不计入正式成交额、成交 Agent 和模型盈亏，已归属且可计算部分仍正常统计。';
