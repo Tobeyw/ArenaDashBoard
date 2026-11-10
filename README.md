@@ -74,3 +74,9 @@ ssh -N -L 4310:127.0.0.1:4310 USER@SERVER
 - If 4310 is already occupied locally, set DASHBOARD_PORT=4311. Existing local processes are not stopped by the script.
 - Node 24, non-root user, read-only filesystem, bounded log rotation. Health checks verify PG connectivity; Clerk failures are shown separately in the UI.
 - `check` validates Compose syntax only. `start` waits for database health. Docker restarts exited containers, but an unhealthy status alone does not trigger a restart.
+
+### Platform daily cash balance
+
+The model PnL chart uses the original daily series: each model's last recorded cashBalance snapshot on each Beijing calendar date, before the selected period end. A date without a snapshot remains null and breaks the line. It uses the existing platformSnapshots source, which includes snapshots with non-null totalPnl. It does not apply the performance API's rolling window, strategy-version roster, or intraday sampling. Cash excludes position value and does not deduct open-order reservations.
+
+Platform order direction uses the decision's canonical outcome and YES/NO side; missing directions are labelled unknown. Single-event kickoff times use the latest recorded CatalogEventRevision and display in Asia/Shanghai.

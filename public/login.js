@@ -22,13 +22,7 @@ form.addEventListener("submit", async (event) => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "登录失败");
-    const requested =
-      new URLSearchParams(location.search).get("returnTo") || "/";
-    const returnTo =
-      requested.startsWith("/") && !requested.startsWith("//")
-        ? requested
-        : "/";
-    location.replace(returnTo + (returnTo === "/" ? location.hash : ""));
+    location.replace("/#overview");
   } catch (reason) {
     error.textContent = reason.message;
     password.select();

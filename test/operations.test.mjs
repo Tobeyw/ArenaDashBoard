@@ -6,7 +6,7 @@ const c={status:'AVAILABLE',users:[{id:'u',registeredAt:'2026-11-01T00:00:00Z'},
 const r={kind:'today',from:'2026-11-08T16:00:00Z',to:'2026-11-09T10:00:00Z'};
 test('comparison handles missing, zero, percentages and profit sign changes',()=>{assert.equal(compare(null,0).text,'—');assert.match(compare(2,0).text,/新增/);assert.match(compare(15,12,'rate').text,/3.00 个百分点/);assert.match(compare(2,-3,'pnl').text,/转盈/);assert.equal(compare(0,0).text,'持平');});
 test('equal elapsed duration and cumulative exclusion',()=>{const p=previousRange(r,d.asOf);assert.equal(+new Date(p.to)-new Date(p.from),+new Date(r.to)-new Date(r.from));assert.equal(previousRange({...r,kind:'all'},d.asOf),null);});
-test('platform and user orders never mix despite shared model',()=>{const u=operations(d,c,new URLSearchParams({view:'orders'}),r),p=operations(d,c,new URLSearchParams({view:'platform-orders'}),r);assert.deepEqual(u.items.map(x=>x.id),['o']);assert.deepEqual(p.items.map(x=>x.id),['po']);assert.equal(p.metrics.find(m=>m.key==='orders').value,1);});
+test('platform and user orders never mix despite shared model',()=>{const u=operations(d,c,new URLSearchParams({view:'orders'}),r),p=operations(d,c,new URLSearchParams({view:'platform-orders'}),r);assert.deepEqual(u.items.map(x=>x.id),['o']);assert.deepEqual(p.items.map(x=>x.id),['po']);assert.equal(p.metrics.length,0);});
 test('intersecting filters affect both metrics and all table rows',()=>{const p=operations(d,c,new URLSearchParams({view:'orders',status:'FILLED'}),r);assert.equal(p.total,0);assert.equal(p.metrics.find(m=>m.key==='orders').value,0);});
 test('numeric sort and missing values',()=>{assert.deepEqual(sortRows([{volume:null},{volume:'9'},{volume:'100'}],'volume','desc').map(x=>x.volume),['100','9',null]);});
 test('every navigation page has a valid result',()=>{for(const view of views){const result=operations(d,c,new URLSearchParams({view}),r);assert.ok(result.columns.length,view);assert.ok(Array.isArray(result.charts),view);}});
@@ -24,7 +24,7 @@ test('7-day cohort excludes immature users and out-of-window conversions',()=>{
 
 test('user overview shows six requested metrics with historical registration cutoff',()=>{
  const result=operations(d,c,new URLSearchParams({view:'users'}),r);
- assert.deepEqual(result.metrics.map(m=>m.label),['截至期末注册用户','本期新增注册','账户绑定率','7日配置转化率','7日首单转化率','本期活跃用户']);
+ assert.deepEqual(result.metrics.slice(0,6).map(m=>m.label),['截至期末注册用户','本期新增注册','账户绑定率','7日配置转化率','7日首单转化率','本期活跃用户']);
  assert.equal(result.metrics[0].value,1);
  assert.equal(result.metrics[0].previous,1);
  assert.equal(result.metrics[2].value,0);
@@ -133,15 +133,19 @@ test('platform overview strategy analysis isolates platform data and uses execut
 });
 
 
-test('market overview compares order counts and requested amounts before event ranking',()=>{
+test('market overview accumulates daily orders and requested amounts before event ranking',()=>{
  const order={...d.orders[0],competition:'EPL',requestedStake:'10'};
  const snapshot={...d,orders:[order,{...order,id:'o2',state:'PENDING',requestedStake:'2.5'},{...order,id:'nba',competition:'NBA',requestedStake:'7'},{...order,id:'old',createdAt:'2026-11-01T00:00:00Z',requestedStake:'100'}]};
  const result=operations(snapshot,c,new URLSearchParams({view:'events'}),r);
- assert.deepEqual(result.charts.map(x=>x.title),['市场累计订单数','市场累计金额','比赛盈亏排名']);
- assert.deepEqual(result.charts[0].rows,[{name:'EPL',orders:2,amount:'12.5'},{name:'NBA',orders:1,amount:'7'}]);
+ assert.deepEqual(result.charts.map(x=>x.title),['每日累计订单数','每日累计下单金额','比赛盈亏排名']);
+ assert.deepEqual(result.charts[0].rows,[{date:'2026-11-09',orders:3,amount:'19.5'}]);
  assert.equal(result.charts[0].key,'orders');assert.equal(result.charts[1].key,'amount');
  const selected=operations(snapshot,c,new URLSearchParams({view:'events',market:'NBA'}),r);
- assert.deepEqual(selected.charts[1].rows,[{name:'NBA',orders:1,amount:'7'}]);
+ assert.deepEqual(selected.charts[1].rows,[{date:'2026-11-09',orders:1,amount:'7'}]);
+ const extended=operations({...snapshot,orders:[...snapshot.orders,{...order,id:'earlier',createdAt:'2026-11-07T01:00:00Z',requestedStake:'0.1'},{...order,id:'earlier',createdAt:'2026-11-07T01:00:00Z',requestedStake:'0.1'}]},c,new URLSearchParams({view:'events'}),{...r,kind:'custom',from:'2026-11-05T16:00:00Z'});
+ assert.deepEqual(extended.charts[0].rows,[{date:'2026-11-06',orders:0,amount:'0'},{date:'2026-11-07',orders:1,amount:'0.1'},{date:'2026-11-08',orders:1,amount:'0.1'},{date:'2026-11-09',orders:4,amount:'19.6'}]);
+ assert.equal(extended.charts[1].cumulativeOrders,true);
+
 });
 
 
@@ -226,4 +230,81 @@ test('execution table merges by owner Agent and order, retaining unlinked and un
  const merged=result.items.find(e=>e.orderId==='o'&&e.agentId==='a');
  assert.equal(merged.tradeAmount,'2');assert.equal(merged.settlementAmount,'7');assert.equal(merged.tradeCount,1);assert.equal(merged.settlementCount,1);
  assert.ok(result.charts.some(c=>c.key==='volume'));
+});
+
+test('section KPIs appear once on user and order overview pages',()=>{
+ const get=view=>operations(d,c,new URLSearchParams({view}),r);
+ for(const view of ['user-list','activity','agents','funds','order-list','executions','failures','platform-orders','platform-pnl'])assert.equal(get(view).metrics.length,0,view);
+ const users=get('users').metrics;assert.equal(new Set(users.map(x=>x.key)).size,users.length);
+ assert.deepEqual(users.map(x=>x.key),['registeredEnd','registered','bindingRate','configConversion','cohortConversion','traders']);
+ assert.equal(get('orders').metrics.find(x=>x.key==='orders').value,1);
+});
+test('market leaders use requested order totals and handle missing profit samples',()=>{
+ const orders=[{...d.orders[0],canonicalEventId:'e1',fixtureName:'A vs B',modelId:'provider/a',requestedStake:'12'},{...d.orders[0],id:'second',canonicalEventId:'e1',fixtureName:'A vs B',modelId:'provider/b',requestedStake:'20'},{...d.orders[0],id:'third',canonicalEventId:'e2',fixtureName:'C vs D',modelId:'provider/a',requestedStake:'2'}];
+ const result=operations({...d,orders},c,new URLSearchParams({view:'events'}),r);
+ assert.equal(result.metrics.length,6);
+ const metric=key=>result.metrics.find(x=>x.key===key);
+ assert.equal(metric('event-orders').value,2);assert.equal(metric('event-amount').value,'32');assert.deepEqual(metric('event-orders').destination.filters,{event:['e1']});
+ assert.equal(metric('model-orders').value,2);assert.deepEqual(metric('model-amount').destination.filters,{model:['provider/b']});
+ assert.equal(metric('event-profit').value,null);assert.equal(metric('model-loss'),undefined);assert.equal(metric('event-loss'),undefined);
+ const scoped=operations({...d,orders},c,new URLSearchParams({view:'events',model:'provider/a'}),r);
+ assert.equal(scoped.metrics.find(x=>x.key==='event-amount').value,'12');
+});
+
+test('platform order direction uses canonical outcome and YES NO side',()=>{
+ const orders=['HOME','DRAW','AWAY'].map((canonicalOutcome,i)=>({...d.platformOrders[0],id:'direction'+i,canonicalOutcome,positionSide:'YES',homeTeamName:'A',awayTeamName:'B'}));
+ orders.push({...orders[0],id:'no',positionSide:'NO'});
+ const result=operations({...d,platformOrders:orders},c,new URLSearchParams({view:'platform-orders'}),r);
+ assert.ok(result.columns.some(x=>x.key==='betDirection'));
+ const labels=result.items.map(x=>x.betDirection);for(const label of ['A胜','平局','B胜','否：A胜'])assert.ok(labels.includes(label));
+});
+test('single event metadata uses latest recorded fixture kickoff',()=>{
+ const e={ownerClerkUserId:'u',agentId:'a',orderId:'o',modelId:'same-model',canonicalEventId:'event',executionKind:'TRADE',side:'BUY',attributionStatus:'ATTRIBUTED',executedAt:'2026-11-09T01:00:00Z',actualFilledShares:'1',actualFilledValue:'0.5',actualExecutionPrice:'0.5',feeAmount:'0',feeType:'COLLATERAL',marketId:'m',tokenId:'t'};
+ const result=operations({...d,executions:[e],eventRevisions:[{eventId:'event',kickoffAt:'2026-11-10T20:00:00Z'}]},c,new URLSearchParams({view:'events'}),r);
+ assert.equal(result.items[0].kickoffAt,'2026-11-10T20:00:00Z');
+});
+
+test('shared analysis shows predictions and precisely linked user and platform decisions',()=>{
+ const analysis={id:'analysis',modelId:'same-model',state:'COMPLETED',createdAt:'2026-11-09T00:00:00Z',outcomeProbabilities:{home_win:0.6,draw:0.25,away_win:0.15}};
+ const base={id:'s',sharedModelAnalysisId:'analysis',ownerClerkUserId:'u',decidedAt:'2026-11-09T01:00:00Z',decision:'BUY',canonicalOutcome:'home_win',positionSide:'YES',homeTeamName:'A'};
+ const snapshot={...d,analyses:[analysis],signals:[base,{...base,id:'skip',decision:'NO_TRADE'},{...base,id:'other',sharedModelAnalysisId:'different'}],platformDecisions:[{...base,canonicalOutcome:'DRAW',positionSide:'NO'}]};
+ const row=operations(snapshot,c,new URLSearchParams({view:'analyses'}),r).items[0];
+ assert.equal(row.predictedProbabilities,'主胜 60.0% / 平局 25.0% / 客胜 15.0%');assert.equal(row.agentSignals,'买入 · A胜：1 条；不交易：1 条');assert.equal(row.platformDecisionSummary,'买入 · 否：平局：1 条');
+ const missing=operations({...d,analyses:[{...analysis,state:'FAILED'}]},c,new URLSearchParams({view:'analyses'}),r).items[0];assert.equal(missing.predictedProbabilities,'暂无有效预测');assert.equal(missing.agentSignals,'暂无关联记录');
+});
+
+test('platform PnL details have a separate entry with the same filtered rows and no charts or cards',()=>{
+ const get=view=>operations(d,c,new URLSearchParams({view,model:'same-model'}),r);
+ const analysis=get('platform-pnl'),details=get('platform-pnl-details');
+ assert.deepEqual(details.items,analysis.items);
+ assert.deepEqual(details.columns,analysis.columns);
+ assert.equal(details.charts.length,0);
+ assert.equal(details.metrics.length,0);
+ assert.ok(analysis.charts.length>0);
+});
+
+test('user detail menu preserves cohort filters and rows without duplicate charts',()=>{
+ const get=(view,population)=>operations(d,c,new URLSearchParams({view,...(population?{population}:{})}),r);
+ for(const population of [undefined,'registered','registeredEnd','cohort-registered','traded']){
+  const analysis=get('user-list',population),details=get('user-details',population);
+  assert.deepEqual(details.items,analysis.items);
+  assert.deepEqual(details.columns,analysis.columns);
+  assert.equal(details.metrics.length,0);
+  assert.equal(details.charts.length,0);
+  assert.ok(analysis.charts.length>0);
+ }
+});
+
+test('daily model cash balance uses last snapshot per Beijing day and leaves missing dates empty',()=>{
+ const snapshot={...d,platformSnapshots:[
+  {modelId:'same-model',asOf:'2026-11-06T15:00:00Z',cashBalance:'100',accountValue:'900'},
+  {modelId:'same-model',asOf:'2026-11-06T16:05:00Z',cashBalance:'80'},
+  {modelId:'same-model',asOf:'2026-11-07T15:59:00Z',cashBalance:'70'},
+  {modelId:'same-model',asOf:'2026-11-09T01:00:00Z',cashBalance:'60'},
+  {modelId:'same-model',asOf:r.to,cashBalance:'999'}]};
+ const result=operations(snapshot,c,new URLSearchParams({view:'platform-pnl'}),{...r,kind:'custom',from:'2026-11-05T16:00:00Z'});
+ const chart=result.charts.find(x=>x.title==='平台各模型每日现金余额');
+ assert.deepEqual(chart.rows.map(x=>x['same-model']),['100','70',null,'60']);
+ assert.deepEqual(chart.rows.map(x=>x.date),['2026-11-06','2026-11-07','2026-11-08','2026-11-09']);
+ assert.equal(chart.timeScale,undefined);
 });
